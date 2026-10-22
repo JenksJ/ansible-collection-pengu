@@ -1,0 +1,14 @@
+---
+namespace: pengu_utils
+name: pengu_roles
+version: 0.1.0
+readme: README.md
+authors:
+  - Jonathan Jenkins <bertie@stackhpc.com>
+description: Ansible collection for pengu roles
+license:
+  - Apache-2.0
+# tags:
+#   - ansible-init
+dependencies: {}
+repository: https://github.com/jenksj/ansible-collection-pengu
