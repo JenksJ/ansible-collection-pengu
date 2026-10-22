@@ -1,0 +1,12 @@
+---
+
+
+file_hash_check_do_hashes: true
+
+file_hash_check_files:
+  some_grouping:
+    - name: "/path/to/file1"
+      hash: "md5hexstring"
+    - name: "/path/to/file2"
+      hash: "md5hexstring"
+

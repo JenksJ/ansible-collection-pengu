@@ -1,0 +1,7 @@
+---
+
+# sssd_groups_to_map:
+#   - sssd_source_group: ORG_Group_Team
+#     linux_target_group: linux_group
+#   - sssd_source_group: group2
+#     linux_target_group: groupxxx

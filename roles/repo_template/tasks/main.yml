@@ -1,0 +1,163 @@
+- set_fact:
+    repo_name: '{{ repo_template_repo_url | replace(":", "/") | basename | regex_replace("\.git$", "") }}'
+
+- set_fact:
+    controller_repo: '{{ repo_template_controller_dest }}/{{ repo_name }}'
+
+- debug:
+    msg: "local repo path is {{ controller_repo }}"
+
+- name: "Clone or update repo locally {{ repo_template_repo_url }}"
+  git:
+    repo: "{{ repo_template_repo_url }}"
+    dest: "{{ controller_repo }}"
+    key_file: "{{ repo_template_git_key_file | default(omit) }}"
+    accept_hostkey: "{{ repo_template_git_accept_hostkey | default(omit) }}"
+    update: "{{ repo_template_git_update | default(yes) }}"
+    force: "{{ repo_template_git_force | default(yes) }}"
+    version: "{{ repo_template_git_version | default(omit) }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Find template candidate files
+  find:
+    paths: "{{ controller_repo }}"
+    file_type: file
+    use_regex: true
+    patterns: "{{ template_extensions }}"
+    recurse: yes
+  register: template_files
+  delegate_to: localhost
+  run_once: true
+
+- name: Build relative template paths (all)
+  set_fact:
+    template_relpaths_all: >-
+      {{
+        template_files.files
+        | map(attribute='path')
+        | map('regex_replace', '^' + controller_repo + '/', '')
+        | list
+      }}
+  delegate_to: localhost
+  run_once: true
+
+- name: Build filtered template file list
+  set_fact:
+    template_relpaths: >-
+      {{
+        template_relpaths_all
+        if (exclude_template_list | length == 0)
+        else
+        template_relpaths_all
+        | reject('match', '(' ~ (exclude_template_list | join('|')) ~ ')')
+        | list
+      }}
+  delegate_to: localhost
+  run_once: true
+
+- block:
+    - name: Capture git branch on Ansible controller
+      command: git rev-parse --abbrev-ref HEAD
+      args:
+        chdir: "{{ controller_repo }}"
+      register: git_branch
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
+    - name: Capture git commit hash on Ansible controller
+      command: git rev-parse HEAD
+      args:
+        chdir: "{{ controller_repo }}"
+      register: git_commit
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+        
+    - name: Capture repo URL on Ansible controller
+      command: git config --get remote.origin.url
+      args:
+        chdir: "{{ controller_repo }}"
+      register: git_url
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
+    - name: Build appliance info dictionary
+      set_fact:
+        appliance_info:
+          branch: "{{ git_branch.stdout }}"
+          commit: "{{ git_commit.stdout }}"
+          url: "{{ git_url.stdout }}"
+          combined: "{{ git_url.stdout }}:{{ git_branch.stdout }}:{{ git_commit.stdout[:8] }}"
+      delegate_to: localhost
+      run_once: true
+
+  when: repo_template_write_version_info
+
+- name: Build rsync excludes for actual template files
+  set_fact:
+    _template_file_excludes: "{{ (template_relpaths | default([])) | map('regex_replace','^(.*)$','--exclude=\\1') | list }}"
+    _pattern_excludes: "{{ (exclude_patterns | default([])) | map('regex_replace','^(.*)$','--exclude=\\1') | list }}"
+    _strip_regex: "{{ '(' ~ (template_extensions_to_strip | map('regex_escape') | join('|')) ~ ')$' }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Build rsync options
+  set_fact:
+    _repo_rsync_opts: >-
+      {{
+        ['--omit-dir-times']
+        + (['--exclude=.git'] if repo_template_exclude_git else [])
+        + _pattern_excludes
+        + _template_file_excludes
+      }}
+  delegate_to: localhost
+  run_once: true
+#['--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r']
+
+- name: Synchronize repo to remote
+  synchronize:
+    src: "{{ controller_repo }}/"
+    dest: "{{ remote_dest }}/"
+    recursive: yes
+    delete: no
+    rsync_opts: "{{ _repo_rsync_opts }}"
+    rsync_path: >-
+      {{
+        'sudo -u ' ~ repo_template_become_user ~ ' rsync'
+        if (repo_template_become_user is defined and repo_template_become_user | length > 0)
+        else 'rsync'
+      }}
+  delegate_to: localhost
+
+
+- name: Template files on remote
+  template:
+    src: "{{ controller_repo }}/{{ item | regex_replace('^/', '') }}"
+    dest: "{{ remote_dest }}/{{ item | regex_replace(_strip_regex, '') }}"
+    mode: "{{ repo_template_template_mode }}"
+    backup: yes
+  loop: "{{ template_relpaths }}"
+  become: "{{ repo_template_become_user | default('') | length > 0 }}"
+  become_user: "{{ repo_template_become_user | default(omit) }}"
+
+- name: Ensure version info directory exists on remote
+  file:
+    path: "{{ repo_template_version_info_dir }}"
+    state: directory
+    mode: "0755"
+    owner: "{{ repo_template_become_user }}"
+    group: "{{ repo_template_become_user_group }}"
+  when: repo_template_write_version_info
+  become: "{{ repo_template_become_user | default('') | length > 0 }}"
+
+- name: Write pipeline version summary to remote host
+  copy:
+    content: "{{ appliance_info | to_nice_json }}"
+    dest: "{{ repo_template_version_info_dir }}/{{ repo_template_version_info_file }}"
+    mode: "0644"
+  when: repo_template_write_version_info
+  become: "{{ repo_template_become_user | default('') | length > 0 }}"
+  become_user: "{{ repo_template_become_user | default(omit) }}"

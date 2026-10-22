@@ -1,0 +1,8 @@
+---
+
+- name: Process each SSSD group to add mounts per user
+  include_tasks: process_sssd_group.yml
+  loop: "{{ sssd_groups_and_mounts }}"
+  loop_control:
+    loop_var: outer_item
+

@@ -1,0 +1,170 @@
+---
+- name: Run setup tasks once 
+  run_once: true
+  delegate_to: "{{ groups['file_hash_check'][0] }}"
+  block:
+    - name: Make flat file list
+      set_fact:
+        flat_file_list: []
+
+    - name: Flatten file dictionary and add group names 
+      set_fact:
+        flat_file_list: >-
+          {{
+            flat_file_list + 
+            [ item.1 | combine({'group': item.0.key}) ]
+          }}
+      loop: "{{ file_hash_check_files | dict2items | subelements('value') }}"
+      loop_control:
+        label: "{{ item.1.name }}"
+
+    - name: Stat files on the first host (no checksum)
+      become: yes
+      stat:
+        path: "{{ item.name }}"
+        get_checksum: false
+        get_mime: false
+      loop: "{{ flat_file_list }}"
+      register: file_stats
+
+    - name: Fail if any file is missing
+      fail:
+        msg: "File missing on source host: {{ item.item.name }} (Group: {{ item.item.group }})"
+      when: item.stat.exists is not defined or not item.stat.exists
+      loop: "{{ file_stats.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Sort files by size
+      set_fact:
+        sorted_file_list: >-
+          {{
+            file_stats.results
+            | sort(attribute='stat.size', reverse=true)
+            | map(attribute='item')
+            | list
+          }}
+
+    - name: Build size-balanced distribution
+      set_fact:
+        distributed_files: |-
+          {%- set hosts = groups['file_hash_check'] -%}
+          
+          {# Create a fast lookup map for file sizes #}
+          {%- set size_map = {} -%}
+          {%- for r in file_stats.results -%}
+            {%- set _ = size_map.update({r.item.name: r.stat.size | default(0) | int}) -%}
+          {%- endfor -%}
+
+          {# Build initial empty structures safely using Jinja loops #}
+          {%- set initial_sizes = {} -%}
+          {%- set initial_files = {} -%}
+          {%- for h in hosts -%}
+            {%- set _ = initial_sizes.update({h: 0}) -%}
+            {%- set _ = initial_files.update({h: []}) -%}
+          {%- endfor -%}
+
+          {# Place arrays into namespace to allow mutations to persist across loop steps #}
+          {%- set ns = namespace(host_sizes=initial_sizes, host_files=initial_files) -%}
+
+          {%- for file in sorted_file_list -%}
+            {# Pick the host that currently has the smallest total file size payload #}
+            {%- set target = (ns.host_sizes | dict2items | sort(attribute='value') | first).key -%}
+
+            {# Assign the file array payload element to the selected target #}
+            {%- set current_files = ns.host_files[target] -%}
+            {%- set _ = ns.host_files.update({target: current_files + [file]}) -%}
+
+            {# Update the cumulative tracked size metric for that target host #}
+            {%- set file_size = size_map[file.name] | default(0) -%}
+            {%- set _ = ns.host_sizes.update({target: ns.host_sizes[target] + file_size}) -%}
+          {%- endfor -%}
+
+          {{ ns.host_files }}
+
+- name: Set per-host file list
+  set_fact:
+    my_files: >-
+      {{
+        hostvars[groups['file_hash_check'][0]].distributed_files[inventory_hostname]
+        | default([])
+      }}
+
+# - debug:
+#         msg: "my_files: {{ my_files }}"
+
+
+# - name: Distribute and set per-host file list 
+#   set_fact:
+#     my_files: |-
+#       {%- set host_idx = groups['file_hash_check'].index(inventory_hostname) -%}
+#       {%- set files_acc = [] -%}
+#       {%- set sorted_list = hostvars[groups['file_hash_check'][0]]['sorted_file_list'] -%}
+#       {%- for item in sorted_list -%}
+#         {%- if (loop.index0 % (groups['file_hash_check'] | length)) == host_idx -%}
+#           {%- set _ = files_acc.append(item) -%}
+#         {%- endif -%}
+#       {%- endfor -%}
+#       {{ files_acc }}
+
+- name: Compute MD5 per file on all hosts in parallel
+  become: yes
+  command: "md5sum {{ item.name }}"
+  loop: "{{ my_files | default([]) }}"
+  loop_control:
+    label: "[{{ item.group }}] {{ item.name }}"
+  register: md5_results
+  changed_when: false
+  when: file_hash_check_do_hashes
+
+- name: Build result list on each host
+  set_fact:
+    md5_checked_files: >-
+      {{
+        (md5_checked_files | default([]))
+        +
+        [ {
+            'name': item.item.name,
+            'group': item.item.group,
+            'expected': item.item.hash,
+            'computed': (item.stdout.split()[0] if (item.stdout | default('')) | length > 0 else ''),
+            'rc': item.rc,
+            'finished': (item.rc == 0)
+          } ]
+      }}
+  loop: "{{ md5_results.results | default([]) }}"
+  when: 
+    - file_hash_check_do_hashes
+    - md5_results.results is defined
+
+- name: Gather all results to coordinator host
+  run_once: true
+  delegate_to: "{{ groups['file_hash_check'][0] }}"
+  set_fact:
+    all_md5_results: >-
+      {{
+        groups['file_hash_check']
+
+        | map('extract', hostvars, 'md5_checked_files')
+        | select('defined')
+        | list
+
+        | flatten
+      }}
+  when: file_hash_check_do_hashes
+
+- name: Validate all hashes and completeness
+  run_once: true
+  delegate_to: "{{ groups['file_hash_check'][0] }}"
+  assert:
+    that:
+      - all_md5_results | length == hostvars[groups['file_hash_check'][0]]['flat_file_list'] | length
+      - item.finished
+      - item.rc == 0
+      - item.computed == item.expected
+    fail_msg: >-
+      Hash check failed for group [{{ item.group | default('Unknown') }}]. 
+      Problematic entry: {{ item.name | default('Unknown') }} (Expected: {{ item.expected | default('None') }}, Got: {{ item.computed | default('None') }})
+    quiet: true
+  loop: "{{ all_md5_results | default([]) }}"
+  when: file_hash_check_do_hashes

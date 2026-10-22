@@ -1,0 +1,8 @@
+---
+
+- name: Process each SSSD group mapping
+  include_tasks: process_sssd_group.yml
+  loop: "{{ sssd_groups_to_map }}"
+  loop_control:
+    loop_var: outer_item
+

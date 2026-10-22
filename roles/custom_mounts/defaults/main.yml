@@ -1,0 +1,8 @@
+---
+
+# ceph_mt_conf_src_dir: "{{ appliances_environment_root }}/files"
+ceph_mt_conf_src_dir: "{{ role_path }}/files"
+ceph_common_version: "2:19.2.2"  # if false will be latest
+ceph_repo_release: squid
+
+custom_mounts: {}

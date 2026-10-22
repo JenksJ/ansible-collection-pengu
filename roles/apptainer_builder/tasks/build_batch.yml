@@ -1,0 +1,45 @@
+---
+
+# - name: Show batches
+#   ansible.builtin.debug:
+#     msg: " batch {{ appt_batch_number }}/{{ appt_batch_total }}"
+
+- name: "Launch build (batch {{ appt_batch_number }}/{{ appt_batch_total }})"
+  become: yes
+  ansible.builtin.shell: >
+    cd {{ apptainer_builder_run_dir | default("~/") }} &&
+    timeout {{ apptainer_build_timeout }}
+    apptainer build {{ apptainer_build_opts }}
+    {{ item.force_flag }}
+    {{ item.sif_path }} {{ item.def_path }}
+    > {{ item.log_path }} 2>&1
+  loop: "{{ appt_batch }}"
+  loop_control:
+    label: "{{ item.name }}"
+  async: "{{ apptainer_build_timeout + 60 }}"
+  poll: 0
+  register: appt_batch_jobs
+
+- name: "Wait for builds to finish (batch {{ appt_batch_number }}/{{ appt_batch_total }})"
+  become: yes
+  ansible.builtin.async_status:
+    jid: "{{ item.ansible_job_id }}"
+  loop: "{{ appt_batch_jobs.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  register: appt_batch_status
+  until: appt_batch_status.finished
+  retries: "{{ apptainer_poll_retries }}"
+  delay: "{{ apptainer_poll_delay }}"
+
+- name: "Validate results (batch {{ appt_batch_number }}/{{ appt_batch_total }})"
+  ansible.builtin.fail:
+    msg: |
+      Apptainer build failed or timed out
+      container: {{ item.item.name }}
+      log: {{ item.item.log_path }}
+      rc: {{ item.rc | default('unknown') }}
+  when:
+    - item.rc is defined
+    - item.rc != 0
+  loop: "{{ appt_batch_status.results }}"

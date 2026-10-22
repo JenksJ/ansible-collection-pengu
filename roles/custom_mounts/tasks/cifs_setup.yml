@@ -1,0 +1,16 @@
+---
+
+- name: "{{ abs_mount_point }} - Template CIFS credentials file"
+  become: true
+  template:
+    src: cifs_credentials.j2
+    dest: "{{ cifs_item.value.credentials.file_path }}"
+    mode: 0600
+  when: cifs_item.value.state | default('mounted') == 'mounted'
+
+- name: "{{ abs_mount_point }} - Remove CIFS credentials file"
+  become: true
+  file:
+    path: "{{ cifs_item.value.credentials.file_path }}"
+    state: absent
+  when: cifs_item.value.state | default('mounted') == 'absent'

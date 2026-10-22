@@ -1,0 +1,66 @@
+---
+
+- name: "{{ abs_mount_point }} - Check if RBD image is already mapped"
+  become: true
+  ansible.builtin.shell: |
+    rbd -c /etc/ceph/{{ ceph_rbd_item.value.credentials.ceph_conf | default("ceph.conf") }} showmapped | grep "{{ ceph_rbd_item.value.pool_name }}" | grep "{{ ceph_rbd_item.value.image_name }}" | awk '{print $NF}'
+  register: rbd_existing_map
+  changed_when: false
+
+- block:
+    - name: "{{ abs_mount_point }} - Map the RBD image if not already mapped"
+      become: true
+      command: >
+        rbd -c /etc/ceph/{{ ceph_rbd_item.value.credentials.ceph_conf | default("ceph.conf") }} map {{ ceph_rbd_item.value.pool_name }}/{{ ceph_rbd_item.value.image_name }}
+        --id {{ ceph_rbd_item.value.credentials.client_name }}
+      when: rbd_existing_map.stdout == ""
+      register: rbd_map
+      changed_when: "'/dev/rbd' in rbd_map.stdout"
+
+    - name: "{{ abs_mount_point }} - Determine RBD device path"
+      set_fact:
+        rbd_device_path: "{{ (rbd_existing_map.stdout | trim) if rbd_existing_map.stdout != '' else (rbd_map.stdout | trim) }}"
+
+    - name: "{{ abs_mount_point }} - Check if device is already formatted"
+      become: true
+      command: blkid {{ rbd_device_path }}
+      register: blkid_output
+      failed_when: false
+      changed_when: false
+
+    - name: "{{ abs_mount_point }} - Format the RBD device"
+      become: true
+      filesystem:
+        fstype: "{{ ceph_rbd_item.value.fstype }}"
+        dev: "{{ rbd_device_path }}"
+      when: blkid_output.rc != 0
+
+  when: ceph_rbd_item.value.state | default('mounted') == 'mounted'
+
+- block:
+    - name: "{{ abs_mount_point }} - Unmount if mounted"
+      become: true
+      mount:
+        path: "{{ ceph_rbd_item.value.mount_point }}"
+        state: unmounted
+
+
+    - name: "{{ abs_mount_point }} - Unmap RBD if mapped"
+      become: true
+      shell: rbd -c /etc/ceph/{{ ceph_rbd_item.value.credentials.ceph_conf | default("ceph.conf") }} unmap {{ rbd_existing_map.stdout }}
+      when: rbd_existing_map.stdout != ""
+      register: rbd_unmap
+      changed_when: "'unmapped' in rbd_unmap.stdout or rbd_unmap.rc == 0"
+  when: ceph_rbd_item.value.state | default('mounted') == 'absent'
+
+- name: "{{ abs_mount_point }} - Mount the RBD device"
+  become: true
+  mount:
+    path: "{{ ceph_rbd_item.value.mount_point }}"
+    src: "{{ rbd_device_path }}"
+    fstype: "{{ ceph_rbd_item.value.fstype }}"
+    opts: "{{ ceph_rbd_item.value.mount_opts }}"
+    state: "{{ ceph_rbd_item.value.state | default('mounted') }}"
+    dump: "{{ ceph_rbd_item.value.dump | default(omit) }}"
+    passno: "{{ ceph_rbd_item.value.passno | default(omit) }}"
+  when: ceph_rbd_item.value.state | default('mounted') == 'mounted'

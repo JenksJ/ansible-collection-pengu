@@ -1,0 +1,44 @@
+# Optional remote user to run tasks as
+repo_template_become_user: ""
+
+# Repository info
+repo_template_repo_url: ""
+repo_template_git_key_file: ""
+repo_template_git_accept_hostkey: true
+repo_template_git_version: ""   # empty = default branch
+repo_template_git_force: yes
+repo_template_git_update: yes
+
+# Where repo is cloned on the controller
+repo_template_controller_dest: "{{ lookup('env','HOME') }}/ansible_build/repos"
+
+# Destination root on remote host
+remote_dest: "/opt/location_2"
+
+# File extensions to template
+template_extensions: # regex on find file basename - use single quote or double \\ escape 
+  - '.*\.j2$'
+  # - '.*\.yaml$'
+  # - '^qc\.prod\.config$' # whole file basename 
+# List of relative file paths or directories to exclude
+exclude_template_list: [] # regex - use single quote or double \\ escape 
+#  - '.*/software_configs/.*'
+# rsync exclude glob pattern 
+exclude_patterns: [] #  ["*pengu_logo.png", "*bin/*"]
+
+template_extensions_to_strip:
+  - ".j2"
+
+# Behaviour flags
+repo_template_exclude_git: true
+repo_template_fail_on_undefined: true
+
+# Template file permissions
+repo_template_template_mode: "0644"
+
+# Optional: write branch/commit info to remote
+repo_template_write_version_info: false
+repo_template_version_info_dir: "/var/lib/pipeline_versions"
+repo_template_version_info_file: "pipeline_name_version.json"
+
+

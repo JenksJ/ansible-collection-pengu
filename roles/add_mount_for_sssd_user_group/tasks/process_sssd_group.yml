@@ -1,0 +1,96 @@
+---
+
+- name: Get group info
+  command: "getent group {{ outer_item.sssd_source_group }}"
+  run_once: true
+  register: group_info
+  changed_when: false
+  failed_when: group_info.stdout == ""
+
+- name: Extract usernames from group info
+  run_once: true
+  set_fact:
+    usernames: "{{ group_info.stdout.split(':')[-1].split(',') }}"
+
+- name: Get UID for each user
+  shell: "getent passwd {{ item }} | cut -d: -f3"
+  run_once: true
+  register: user_uids
+  loop: "{{ usernames }}"
+  changed_when: false
+  failed_when: false
+
+- name: Filter valid users with UID
+  run_once: true
+  set_fact:
+    valid_users: "{{ user_uids.results | selectattr('stdout', 'match', '^[0-9]+$') | map(attribute='item') | list }}"
+
+# temp mount and add add directories in not present 
+- name: mount to check paths exist on remote mount
+  ansible.builtin.include_role:
+    name: custom_mounts
+  vars:
+    custom_mounts: 
+      temp_mount:
+        method: fstab
+        type: "{{ outer_item.custom_mounts_options.type }}"
+        fs_path: "{{ outer_item.custom_mounts_options.fs_path }}"
+        mount_point: "/mnt/temp_autofs_check"
+        credentials: "{{ outer_item.custom_mounts_options.credentials }}"
+        mount_opts: "{{ outer_item.custom_mounts_options.temp_mount_opts }}"
+        mount_mode: "0750"
+  run_once: true
+  when: 
+  - outer_item.custom_mounts_options.state | default('mounted') != 'absent'
+
+- name: make end point mount dir 
+  become: yes
+  ansible.builtin.file:
+    path: "/mnt/temp_autofs_check/{{ item }}"
+    state: directory
+    mode: "0750"
+  loop: "{{ valid_users }}"
+  changed_when: true
+  run_once: true
+  when: 
+  - outer_item.custom_mounts_options.state | default('mounted') != 'absent'
+
+- name: "remove temp mount "
+  become: true
+  run_once: true
+  mount:
+    path: /mnt/temp_autofs_check
+    state: absent
+  when: outer_item.custom_mounts_options.state | default('mounted') != 'absent'
+
+- name: "remove temp mount "
+  become: true
+  run_once: true
+  file:
+    path: /mnt/temp_autofs_check
+    state: absent
+  when: outer_item.custom_mounts_options.state | default('mounted') != 'absent'
+
+- set_fact:
+    custom_mounts_per_user: "{{ custom_mounts_per_user | default({}) | combine({ item: {
+      'method': outer_item.custom_mounts_options.method,
+      'type': outer_item.custom_mounts_options.type,
+      'fs_path': outer_item.custom_mounts_options.fs_path ~ '/' ~ item,
+      'master_mount_point': outer_item.custom_mounts_options.master_mount_point,
+      'mount_point': item,
+      'state': outer_item.custom_mounts_options.state | default('mounted'),
+      'credentials': outer_item.custom_mounts_options.credentials,
+      'mount_opts': 'uid=' ~ item ~ ',gid=' ~ outer_item.linux_group ~ ',' ~ outer_item.custom_mounts_options.mount_opts
+    }}) }}"
+  loop: "{{ valid_users }}"
+  run_once: true
+
+
+- name: mount to check paths exist
+  ansible.builtin.include_role:
+    name: custom_mounts
+  vars:
+    custom_mounts: "{{ custom_mounts_per_user }}"
+
+
+

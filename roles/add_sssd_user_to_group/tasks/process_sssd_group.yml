@@ -1,0 +1,33 @@
+---
+
+- name: Get group info
+  command: "getent group {{ outer_item.sssd_source_group }}"
+  run_once: true
+  register: group_info
+  changed_when: false
+  failed_when: group_info.stdout == ""
+
+- name: Extract usernames from group info
+  run_once: true
+  set_fact:
+    usernames: "{{ group_info.stdout.split(':')[-1].split(',') }}"
+
+- name: Get UID for each user
+  run_once: true
+  shell: "getent passwd {{ item }} | cut -d: -f3"
+  register: user_uids
+  loop: "{{ usernames }}"
+  changed_when: false
+  failed_when: false
+
+- name: Filter valid users with UID
+  run_once: true
+  set_fact:
+    valid_users: "{{ user_uids.results | selectattr('stdout', 'match', '^[0-9]+$') | map(attribute='item') | list }}"
+
+- name: Add SSSD/AD users to local group
+  command: "usermod -aG {{ outer_item.linux_target_group }} {{ item }}"
+  loop: "{{ valid_users }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: true

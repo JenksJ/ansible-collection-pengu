@@ -1,0 +1,142 @@
+- name: Ensure output and log directories exist
+  become: yes
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ apptainer_builder_become_user | default(omit) }}"
+    group: "{{ apptainer_builder_become_user_group | default(omit) }}"
+  loop:
+    - "{{ apptainer_output_dir }}"
+    - "{{ apptainer_log_dir }}" 
+
+- name: Find apptainer definition files
+  become: yes
+  ansible.builtin.find:
+    paths: "{{ apptainer_source_dir }}"
+    patterns: "{{ apptainer_pattern }}"
+  register: found_defs
+
+- name: Initialise container list
+  ansible.builtin.set_fact:
+    apptainer_containers: []
+    containers_to_build: []
+    build_batches: []
+
+- name: Build container metadata objects
+  ansible.builtin.set_fact:
+    apptainer_containers: "{{ apptainer_containers + [ {
+        'def_path': item.path,
+        'name': (item.path | basename | regex_replace('\\.def$', '')),
+        'sif_path': apptainer_output_dir ~ '/' ~ (item.path | basename | regex_replace('\\.def$', '.sif')),
+        'log_path': apptainer_log_dir ~ '/' ~ (item.path | basename | regex_replace('\\.def$', '.log'))
+    } ] }}"
+  loop: "{{ found_defs.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Check existing SIF files
+  become: yes
+  ansible.builtin.stat:
+    path: "{{ item.sif_path }}"
+  loop: "{{ apptainer_containers }}"
+  register: sif_stats
+
+- name: Merge stat results into container objects
+  ansible.builtin.set_fact:
+    apptainer_containers: "{{ apptainer_containers_with_stat }}"
+  vars:
+    apptainer_containers_with_stat: |
+      {% set out = [] %}
+      {% for i in range(apptainer_containers | length) %}
+      {% set _ = out.append(
+        apptainer_containers[i] | combine({
+          'sif_exists': sif_stats.results[i].stat.exists | default(false)
+        })
+      ) %}
+      {% endfor %}
+      {{ out }}
+
+
+- name: Inspect existing SIF definitions
+  become: yes
+  ansible.builtin.command: "apptainer inspect -d {{ item.sif_path }}"
+  loop: "{{ apptainer_containers }}"
+  register: existing_defs
+  changed_when: false
+  failed_when: false
+  when:
+    - item.sif_exists
+    - not apptainer_force_overwrite
+
+- name: Read source definitions
+  become: yes
+  ansible.builtin.slurp:
+    src: "{{ item.def_path }}"
+  loop: "{{ apptainer_containers }}"
+  register: source_defs
+  when:
+    - not apptainer_force_overwrite
+  
+- name: Evaluate rebuild decisions
+  ansible.builtin.set_fact:
+    containers_to_build: "{{ containers_to_build | default([]) + [ result_obj ] }}"
+  vars:
+    idx: "{{ item }}"
+    container: "{{ apptainer_containers[idx] }}"
+    source_def: "{{ (source_defs.results[idx].content | default('') | b64decode) | trim }}"
+    existing_def: "{{ existing_defs.results[idx].stdout | default('') | trim  }}"
+
+    needs_rebuild: >-
+      {{
+        apptainer_force_overwrite
+        or not container.sif_exists
+        or (container.sif_exists and source_def != existing_def)
+      }}
+
+    result_obj: >-
+      {{
+        container | combine({
+          'needs_rebuild': needs_rebuild,
+          'force_flag': ('--force' if needs_rebuild else '')
+        })
+      }}
+  loop: "{{ range(0, apptainer_containers | length) | list }}"
+  when: needs_rebuild
+
+- name: Show containers_to_build
+  ansible.builtin.debug:
+    msg: "{{ containers_to_build }}, {{ containers_to_build | length }}"
+
+- name: Ensure async directory exists
+  become: yes
+  ansible.builtin.file:
+    path: /root/.ansible_async
+    state: directory
+    mode: '0700'
+
+- name: Skip build when nothing needs rebuilding
+  ansible.builtin.debug:
+    msg: "No Apptainer containers require rebuilding."
+  when: containers_to_build | length == 0
+
+- name: Split containers into build batches
+  ansible.builtin.set_fact:
+    build_batches: "{{ containers_to_build | batch(apptainer_max_parallel) }}"
+  when: containers_to_build | length > 0
+
+# - name: Show  build_batches
+#   ansible.builtin.debug:
+#     msg: "{{build_batches}}"
+
+- name: Process Apptainer build batches
+  ansible.builtin.include_tasks: build_batch.yml
+  vars:
+    appt_batch_number: "{{ appt_batch_idx + 1 }}"
+    appt_batch_total: "{{ build_batches | length }}"
+  loop: "{{ build_batches }}"
+  loop_control:
+    loop_var: appt_batch
+    index_var: appt_batch_idx
+  when: 
+  - containers_to_build | length > 0
+  - apptainer_builder_do_build

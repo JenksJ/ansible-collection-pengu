@@ -1,0 +1,17 @@
+---
+
+apptainer_source_dir: "/path/to/defs"
+apptainer_output_dir: "/path/to/sifs"
+apptainer_builder_run_dir: "~/"
+apptainer_pattern: "*.def"
+apptainer_build_opts: ""
+apptainer_force_overwrite: false
+apptainer_log_dir: "/var/log/apptainer_builds"
+apptainer_max_parallel: 2
+apptainer_builder_become: yes
+apptainer_builder_become_user: ""
+apptainer_builder_become_user_group: ""
+apptainer_builder_do_build: yes
+apptainer_build_timeout: 600 # seconds 600 sec = 10 min
+apptainer_poll_retries: 90   # apptainer_poll_retries * apptainer_poll_delay = total wait seconds 
+apptainer_poll_delay: 10     # 90 * 10 = 900 sec = 15 min
