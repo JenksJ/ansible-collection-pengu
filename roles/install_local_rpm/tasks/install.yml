@@ -1,0 +1,92 @@
+---
+
+
+- name: Gather installed packages
+  package_facts:
+    manager: auto
+
+- name: Determine if any installed package starts with {{ install_item.key }}
+  set_fact:
+    package_installed: >-
+      {{ ansible_facts.packages.keys()
+         | select('match', '^' ~ install_item.key)
+         | list
+         | length > 0 }}
+
+- block:
+
+    - name: set RPM filename 
+      set_fact:
+        rpm_filename: "{{ install_item.value.rpm_file | default(install_item.value.download_url | basename) }}"
+
+    - block:
+
+        - name: Download checksum file
+          get_url:
+            url: "{{ install_item.value.checksum_file_url }}"
+            dest: "{{ install_item.value.download_path }}/checksums.txt"
+
+        # Extract the entire line for this RPM
+        - name: "Extract checksum entry for {{ rpm_filename }}"
+          command: >
+            grep "  \./{{ rpm_filename }}" "{{ install_item.value.download_path }}/checksums.txt"
+          register: checksum_line
+          changed_when: false
+
+        # Auto-detect whether hash is MD5, SHA1, SHA256, SHA512 based on length
+        - name: Detect checksum algorithm
+          set_fact:
+            checksum_algo: >-
+              {{
+                'md5'    if checksum_line.stdout.split()[0] | length == 32  else
+                'sha1'   if checksum_line.stdout.split()[0] | length == 40  else
+                'sha256' if checksum_line.stdout.split()[0] | length == 64  else
+                'sha512' if checksum_line.stdout.split()[0] | length == 128 else
+                'unknown'
+              }}
+
+        - name: Fail if checksum algorithm cannot be detected
+          fail:
+            msg: "Could not detect checksum algorithm for {{ rpm_filename }}. Hash length was unsupported."
+          when: checksum_algo == 'unknown'
+
+        - name: Parse checksum field
+          set_fact:
+            rpm_expected_checksum: "{{ checksum_line.stdout.split()[0] }}"
+
+        - name: "Download rpm {{ install_item.key }} with checksum verification"
+          get_url:
+            url: "{{ install_item.value.download_url }}"
+            dest: "{{ install_item.value.download_path }}/{{ rpm_filename }}"
+            checksum: "{{ checksum_algo }}:{{ rpm_expected_checksum }}"
+
+      when: install_item.value.checksum_file_url is defined
+
+
+    - name: "Download rpm {{ install_item.key }} (no checksum)"
+      get_url:
+        url: "{{ install_item.value.download_url }}"
+        dest: "{{ install_item.value.download_path }}/{{ rpm_filename }}"
+      when: install_item.value.checksum_file_url is not defined
+
+    - name: Install RPM {{ install_item.key }}
+      yum:
+        name: "{{ install_item.value.download_path }}/{{ rpm_filename }}"
+        state: present
+        disable_gpg_check: true
+      become: true
+
+    - name: Remove downloaded RPM file
+      file:
+        path: "{{ install_item.value.download_path }}/{{ rpm_filename }}"
+        state: absent
+
+    - name: Remove downloaded checksum file
+      file:
+        path: "{{ install_item.value.download_path }}/checksums.txt"
+        state: absent
+      when: install_item.value.checksum_file_url is defined
+
+  when: not package_installed
+
+

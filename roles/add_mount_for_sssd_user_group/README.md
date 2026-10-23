@@ -109,9 +109,9 @@ jbloggs
 And the following configuration:
 
 ```yaml
-fs_path: "//fileserver/user_shares/bioinformatics"
-master_mount_point: /mnt/autofs_cifs/bioinformatics
-linux_group: bioinformatics
+fs_path: "//fileserver/user_shares/informatics"
+master_mount_point: /mnt/autofs_cifs/informatics
+linux_group: informatics
 ```
 
 The role generates:
@@ -120,17 +120,18 @@ The role generates:
 jbloggs:
   method: autofs
   type: cifs
-  fs_path: "//fileserver/user_shares/bioinformatics/jbloggs"
-  master_mount_point: /mnt/autofs_cifs/bioinformatics
+  fs_path: "//fileserver/user_shares/informatics/jbloggs"
+  master_mount_point: /mnt/autofs_cifs/informatics
   mount_point: jbloggs
-  credentials: "{{ pengu_cifs_creds }}"
+  credentials: 
+    username: user
+    password: vault_string
+    domain: ORG
+    file_path: /etc/.cifs_credentials
   mount_opts: >-
     uid=jbloggs,
-    gid=bioinformatics,
+    gid=informatics,
     mfsymlinks,
-    vers=3.02,
-    file_mode=0750,
-    dir_mode=0750,
     _netdev,
     nofail
 ```
@@ -138,7 +139,7 @@ jbloggs:
 Resulting mount path:
 
 ```text
-/mnt/autofs_cifs/bioinformatics/jbloggs
+/mnt/autofs_cifs/informatics/jbloggs
 ```
 
 ---

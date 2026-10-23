@@ -1,0 +1,13 @@
+---
+
+
+
+- name: Include mount/fstab setup per mount point
+  ansible.builtin.include_tasks: install.yml
+  loop: "{{ query('dict', local_rpm_to_install) }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    install_item: "{{ item }}"
+
+
