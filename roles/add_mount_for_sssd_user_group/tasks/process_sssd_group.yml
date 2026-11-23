@@ -28,7 +28,7 @@
 # temp mount and add add directories in not present 
 - name: mount to check paths exist on remote mount
   ansible.builtin.include_role:
-    name: custom_mounts
+    name: pengu.general_utils.custom_mounts
   vars:
     custom_mounts: 
       temp_mount:
@@ -88,7 +88,7 @@
 
 - name: mount to check paths exist
   ansible.builtin.include_role:
-    name: custom_mounts
+    name: pengu.general_utils.custom_mounts
   vars:
     custom_mounts: "{{ custom_mounts_per_user }}"
 
